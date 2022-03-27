@@ -1,0 +1,22 @@
+# *.class
+
+# Build directories
+target
+
+# Idea files
+.idea
+*.iml
+*.ipr
+*.iws
+
+# Netbeans files
+*nbactions.xml
+*nb-configuration.xml
+
+# Package Files #
+# *.jar
+# *.war
+# *.ear
+
+#Mac OS specific files
+.DS_Store
