@@ -1,5 +1,6 @@
 package ru.bibarsov.jdbcstdops.core;
 
+import static ru.bibarsov.jdbcstdops.core.ColumnDefinition.*;
 import static ru.bibarsov.jdbcstdops.core.ColumnDefinition.IdMetadata;
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkArgument;
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkNotNull;
@@ -7,6 +8,7 @@ import static ru.bibarsov.jdbcstdops.util.Preconditions.checkState;
 
 import ru.bibarsov.jdbcstdops.annotation.Column;
 import ru.bibarsov.jdbcstdops.annotation.DbSideId;
+import ru.bibarsov.jdbcstdops.annotation.Enumerated;
 import ru.bibarsov.jdbcstdops.annotation.Id;
 import ru.bibarsov.jdbcstdops.annotation.Table;
 import java.lang.reflect.Constructor;
@@ -27,6 +29,7 @@ import javax.annotation.ParametersAreNonnullByDefault;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import ru.bibarsov.jdbcstdops.util.Pair;
 import ru.bibarsov.jdbcstdops.value.DeferredId;
 import ru.bibarsov.jdbcstdops.value.OperationType;
 import ru.bibarsov.jdbcstdops.value.QueryType;
@@ -41,6 +44,8 @@ public class StandardOperations<E, ID> {
   private final List<ColumnDefinition> columnDefinitions;
   private final ColumnDefinition idColumn;
 
+  private final ColumnValueConverter columnValueConverter = new ColumnValueConverter();
+
   public StandardOperations(Class<E> entityClazz, NamedParameterJdbcTemplate jdbcTemplate) {
     checkArgument(entityClazz.getConstructors().length == 1);
     checkArgument(entityClazz.isAnnotationPresent(Table.class));
@@ -54,7 +59,8 @@ public class StandardOperations<E, ID> {
 
   public void create(E entity) {
     QueryFunction queryFunction = queriesLambdas.get(OperationType.CREATE);
-    LinkedHashMap<String, Object> columnsToInsert = generateColumnsToInsert(entity);
+    LinkedHashMap<String, Pair<ColumnDefinition, Object>> columnsToInsert
+        = generateColumnsToInsert(entity);
 
     if (idColumn.idMetadata != null
         && idColumn.idMetadata.isDbSideGenerated
@@ -78,7 +84,8 @@ public class StandardOperations<E, ID> {
 
   public void createOrUpdate(E entity) {
     QueryFunction queryFunction = queriesLambdas.get(OperationType.CREATE_OR_UPDATE);
-    LinkedHashMap<String, Object> columnsToInsert = generateColumnsToInsert(entity);
+    LinkedHashMap<String, Pair<ColumnDefinition, Object>> columnsToInsert
+        = generateColumnsToInsert(entity);
 
     if (idColumn.idMetadata != null
         && idColumn.idMetadata.isDbSideGenerated
@@ -106,7 +113,7 @@ public class StandardOperations<E, ID> {
     //noinspection unchecked
     return (E) queryFunction.query(
         jdbcTemplate,
-        queryBuilder -> queryBuilder.setCondition(idColumn.columnName, id)
+        queryBuilder -> queryBuilder.setCondition(idColumn, id)
     );
   }
 
@@ -121,9 +128,7 @@ public class StandardOperations<E, ID> {
     QueryFunction queryFunction = queriesLambdas.get(OperationType.DELETE);
     queryFunction.query(
         jdbcTemplate,
-        queryBuilder -> {
-          queryBuilder.setIdColumnValue(id);
-        }
+        queryBuilder -> queryBuilder.setCondition(idColumn, id)
     );
   }
 
@@ -143,7 +148,7 @@ public class StandardOperations<E, ID> {
       switch (operationType) {
         case CREATE:
           result.put(operationType, (jdbcTemplate, queryBuilderMutator) -> {
-            var queryBuilder = new QueryBuilder()
+            var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.INSERT)
                 .setTableName(tableName)
                 .setIdColumn(idColumn);
@@ -168,7 +173,7 @@ public class StandardOperations<E, ID> {
           break;
         case CREATE_OR_UPDATE:
           result.put(operationType, (jdbcTemplate, queryBuilderMutator) -> {
-            var queryBuilder = new QueryBuilder()
+            var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.UPSERT)
                 .setTableName(tableName)
                 .setIdColumn(idColumn);
@@ -195,7 +200,7 @@ public class StandardOperations<E, ID> {
               .map(c -> c.columnName)
               .collect(Collectors.toList());
           result.put(operationType, (jdbcTemplate, queryBuilderMutator) -> {
-            var queryBuilder = new QueryBuilder()
+            var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.SELECT)
                 .setTableName(tableName)
                 .setIdColumn(idColumn)
@@ -209,7 +214,10 @@ public class StandardOperations<E, ID> {
                 rs -> {
                   if (rs.next()) {
                     E entity = mapResultSetToEntity(columnDefinitions, entityClazz, rs);
-                    checkState(!rs.next());
+                    checkState(
+                        !rs.next(),
+                        "Query returned more than one result"
+                    );
                     return entity;
                   }
                   return null;
@@ -221,7 +229,7 @@ public class StandardOperations<E, ID> {
           List<String> columnsToSelect =
               columnDefinitions.stream().map(c -> c.columnName).collect(Collectors.toList());
           result.put(operationType, (jdbcTemplate, queryBuilderMutator) -> {
-            var queryBuilder = new QueryBuilder()
+            var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.SELECT)
                 .setTableName(tableName)
                 .setIdColumn(idColumn)
@@ -244,7 +252,7 @@ public class StandardOperations<E, ID> {
           break;
         case DELETE:
           result.put(operationType, (jdbcTemplate, queryBuilderMutator) -> {
-            var queryBuilder = new QueryBuilder()
+            var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.DELETE)
                 .setTableName(tableName)
                 .setIdColumn(idColumn);
@@ -274,22 +282,20 @@ public class StandardOperations<E, ID> {
     for (int i = 0; i < columnDefinitions.size(); i++) {
       ColumnDefinition columnDefinition = columnDefinitions.get(i);
       IdMetadata idMetadata = columnDefinition.idMetadata;
-      if (idMetadata != null && idMetadata.isDbSideGenerated) {
-        DeferredId<Object> deferredId = new DeferredId<>();
-        deferredId.value = rs.getObject(columnDefinition.columnName);
-        constructorArgs[i] = deferredId;
-      } else {
-        constructorArgs[i] = rs.getObject(
-            columnDefinition.columnName, //columnLabel
-            ReflectionTools.primitiveToWrapper(columnDefinition.valueClass) //type
+      EnumMetadata enumMetadata = columnDefinition.enumMetadata;
+
+      constructorArgs[i] = columnValueConverter.toJavaTypeValue(
+          rs,
+          columnDefinition.columnName,
+          idMetadata != null && idMetadata.isDbSideGenerated ?
+              DeferredId.class :
+              ReflectionTools.primitiveToWrapper(columnDefinition.valueClass),
+          enumMetadata
+      );
+      if (!columnDefinition.nullable && constructorArgs[i] == null) {
+        throw new IllegalStateException(
+            "Query returned null value for non-null column " + columnDefinition.columnName
         );
-        if (!columnDefinition.nullable) {
-          if (constructorArgs[i] == null) {
-            throw new IllegalStateException(
-                "Query returned more than one result for " + typeClass.getName()
-            );
-          }
-        }
       }
     }
     try {
@@ -302,14 +308,17 @@ public class StandardOperations<E, ID> {
     }
   }
 
-  private LinkedHashMap<String, Object> generateColumnsToInsert(E entity) {
+  private LinkedHashMap<String, Pair<ColumnDefinition, Object>> generateColumnsToInsert(E entity) {
     //Map<ColumnName, JavaReflectionFieldValue>
-    LinkedHashMap<String, Object> result = new LinkedHashMap<>();
+    LinkedHashMap<String, Pair<ColumnDefinition, Object>> result = new LinkedHashMap<>();
     for (ColumnDefinition columnDefinition : columnDefinitions) {
       try {
         result.put(
             columnDefinition.columnName,
-            columnDefinition.javaReflectionField.get(entity)
+            Pair.of(
+                columnDefinition,
+                columnDefinition.javaReflectionField.get(entity)
+            )
         );
       } catch (IllegalAccessException e) {
         throw new RuntimeException(e);
@@ -361,8 +370,10 @@ public class StandardOperations<E, ID> {
       );
       Column columnAnnotation = entityField.getAnnotation(Column.class);
       boolean hasIdAnnotation = entityField.isAnnotationPresent(Id.class);
+      boolean hasEnumAnnotation = entityField.isAnnotationPresent(Enumerated.class);
 
       IdMetadata idMetadata = null;
+      EnumMetadata enumMetadata = null;
       DbSideId dbSideId = null;
       if (hasIdAnnotation) {
         hasIdField = true;
@@ -374,11 +385,20 @@ public class StandardOperations<E, ID> {
             dbSideId != null ? dbSideId.sequenceName() : null //sequenceName
         );
       }
+      if (hasEnumAnnotation) {
+        Enumerated enumerated = entityField.getAnnotation(Enumerated.class);
+        enumMetadata = new EnumMetadata(
+            enumerated.accessorField().equals("") ? null : enumerated.accessorField(),
+            enumerated.accessorMethod().equals("") ? null : enumerated.accessorMethod(),
+            enumerated.builderMethod().equals("") ? null : enumerated.builderMethod()
+        );
+      }
       result.add(new ColumnDefinition(
           entityField,
           columnAnnotation.name(), //columnName
           entityField.getType(),
           idMetadata,
+          enumMetadata,
           columnAnnotation.nullable() //nullable
       ));
     }

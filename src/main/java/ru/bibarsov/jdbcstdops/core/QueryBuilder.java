@@ -12,23 +12,33 @@ import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import ru.bibarsov.jdbcstdops.util.Pair;
 import ru.bibarsov.jdbcstdops.value.DeferredId;
 import ru.bibarsov.jdbcstdops.value.QueryType;
 
+//TODO Use own ColumnDef type instead of
+// ColumnDefinition (valueClass, javaReflectionField, nullable aren't needed)
 @ParametersAreNonnullByDefault
 public class QueryBuilder {
+
+  private final ColumnValueConverter columnValueConverter;
 
   private QueryType queryType;
   private String tableName;
 
   private boolean built = false;
-  private Map<String, Object> conditions;
+  //Map<ColumnName, Pair<ColumnDefinition, JavaReflectionFieldValue>>
+  private Map<String, Pair<ColumnDefinition, Object>> conditions;
   private List<String> columnsToSelect;
-  //Map<ColumnName, JavaReflectionFieldValue>
-  private Map<String, Object> columnsToInsert;
-  private Object idColumnValue;
+  //Map<ColumnName, Pair<ColumnDefinition, JavaReflectionFieldValue>>
+  private Map<String, Pair<ColumnDefinition, Object>> columnsToInsert;
   private ColumnDefinition idColumn;
   private boolean generateAndReturnId = false; //false by default
+
+  public QueryBuilder(ColumnValueConverter columnValueConverter) {
+    this.columnValueConverter = columnValueConverter;
+  }
 
   public QueryBuilder setType(QueryType queryType) {
     this.queryType = queryType;
@@ -45,11 +55,6 @@ public class QueryBuilder {
     return this;
   }
 
-  public QueryBuilder setIdColumnValue(Object idColumnValue) {
-    this.idColumnValue = idColumnValue;
-    return this;
-  }
-
   public QueryBuilder setColumnsToSelect(List<String> columnNames) {
     checkState(!columnNames.isEmpty());
     this.columnsToSelect = Collections.unmodifiableList(columnNames);
@@ -57,7 +62,9 @@ public class QueryBuilder {
   }
 
   //todo generalize
-  public QueryBuilder setColumnsToInsert(LinkedHashMap<String, Object> columnsToInsert) {
+  public QueryBuilder setColumnsToInsert(
+      LinkedHashMap<String, Pair<ColumnDefinition, Object>> columnsToInsert
+  ) {
     checkState(!columnsToInsert.isEmpty());
     this.columnsToInsert = Collections.unmodifiableMap(columnsToInsert);
     return this;
@@ -68,11 +75,11 @@ public class QueryBuilder {
     return this;
   }
 
-  public QueryBuilder setCondition(String columnName, @Nullable Object value) {
+  public QueryBuilder setCondition(ColumnDefinition column, @Nullable Object value) {
     if (conditions == null) {
       this.conditions = new HashMap<>();
     }
-    this.conditions.put(columnName, value);
+    this.conditions.put(column.columnName, Pair.of(column, value));
     return this;
   }
 
@@ -96,7 +103,10 @@ public class QueryBuilder {
   }
 
   private Query buildInsertQuery() {
-    checkState(columnsToInsert != null && !columnsToInsert.isEmpty());
+    checkState(
+        columnsToInsert != null && !columnsToInsert.isEmpty(),
+        "Columns to insert must be provided"
+    );
     StringBuilder queryString = new StringBuilder();
     queryString.append(String.format(
         "INSERT INTO %s (%s) VALUES (%s)",
@@ -120,15 +130,12 @@ public class QueryBuilder {
     String query = queryString.toString();
     MapSqlParameterSource parameterSource = new MapSqlParameterSource();
     for (var columnToVal : columnsToInsert.entrySet()) {
-      if (columnToVal.getValue() instanceof DeferredId<?>) {
-        Object defIdValue = ((DeferredId<?>) columnToVal.getValue()).value;
-        if (defIdValue == null) {
-          continue;
-        }
-        parameterSource.addValue(columnToVal.getKey(), defIdValue);
-      } else {
-        parameterSource.addValue(columnToVal.getKey(), columnToVal.getValue());
-      }
+      addValue(
+          parameterSource,
+          columnToVal.getKey(),
+          checkNotNull(columnToVal.getValue().left),
+          columnToVal.getValue().right
+      );
     }
     return new Query(query, parameterSource, generateAndReturnId);
   }
@@ -164,22 +171,22 @@ public class QueryBuilder {
     String query = queryString.toString();
     MapSqlParameterSource parameterSource = new MapSqlParameterSource();
     for (var columnToVal : columnsToInsert.entrySet()) {
-      if (columnToVal.getValue() instanceof DeferredId<?>) {
-        Object defIdValue = ((DeferredId<?>) columnToVal.getValue()).value;
-        if (defIdValue == null) {
-          continue;
-        }
-        parameterSource.addValue(columnToVal.getKey(), defIdValue);
-      } else {
-        parameterSource.addValue(columnToVal.getKey(), columnToVal.getValue());
-      }
+      addValue(
+          parameterSource,
+          columnToVal.getKey(),
+          checkNotNull(columnToVal.getValue().left),
+          columnToVal.getValue().right
+      );
     }
     return new Query(query, parameterSource, generateAndReturnId);
 
   }
 
   private Query buildSelectQuery() {
-    checkState(columnsToSelect != null && !columnsToSelect.isEmpty());
+    checkState(
+        columnsToSelect != null && !columnsToSelect.isEmpty(),
+        "Columns to select must be provided"
+    );
     StringBuilder queryString = new StringBuilder();
     queryString.append(String.format(
         "SELECT %s FROM %s",
@@ -200,21 +207,58 @@ public class QueryBuilder {
               )
               .collect(Collectors.joining(" AND ")));
       for (var columnToVal : conditions.entrySet()) {
-        parameterSource.addValue(columnToVal.getKey(), columnToVal.getValue());
+        addValue(
+            parameterSource,
+            columnToVal.getKey(),
+            checkNotNull(columnToVal.getValue().left),
+            columnToVal.getValue().right
+        );
       }
     }
     return new Query(queryString.toString(), parameterSource, generateAndReturnId);
   }
 
   private Query buildDeleteQuery() {
-    String query = String.format(
-        "DELETE FROM %s WHERE %s = %s", //todo support composite id
-        tableName,
-        idColumn.columnName,
-        ":" + idColumn.columnName
+    StringBuilder queryBuilder = new StringBuilder();
+    queryBuilder.append(String.format(
+        "DELETE FROM %s", //todo support composite id
+        tableName
+    ));
+    MapSqlParameterSource parameterSource = new MapSqlParameterSource();
+    if (conditions != null && !conditions.isEmpty()) {
+      queryBuilder.append(" WHERE ")
+          .append(conditions.entrySet().stream()
+              .map(
+                  e -> {
+                    if (e.getValue() == null) {
+                      return e.getKey() + " IS NULL ";
+                    }
+                    return e.getKey() + " = :" + e.getKey();
+                  }
+              )
+              .collect(Collectors.joining(" AND ")));
+      for (var columnToVal : conditions.entrySet()) {
+        addValue(
+            parameterSource,
+            columnToVal.getKey(),
+            checkNotNull(columnToVal.getValue().left),
+            columnToVal.getValue().right
+        );
+      }
+    }
+    return new Query(queryBuilder.toString(), parameterSource, generateAndReturnId);
+  }
+
+  private void addValue(
+      MapSqlParameterSource mapSqlParameterSource,
+      String paramName,
+      ColumnDefinition columnDefinition,
+      @Nullable Object value
+  ) {
+    @Nullable Object dbTypeValue = columnValueConverter.toDbTypeValue(
+        value,
+        columnDefinition.enumMetadata
     );
-    MapSqlParameterSource parameterSource = new MapSqlParameterSource()
-        .addValue(idColumn.columnName, idColumnValue);
-    return new Query(query, parameterSource, generateAndReturnId);
+    mapSqlParameterSource.addValue(paramName, dbTypeValue);
   }
 }

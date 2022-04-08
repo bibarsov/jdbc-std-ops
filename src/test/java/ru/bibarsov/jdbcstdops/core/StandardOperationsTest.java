@@ -3,6 +3,7 @@ package ru.bibarsov.jdbcstdops.core;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkNotNull;
 
+import java.time.Instant;
 import ru.bibarsov.jdbcstdops.entity.Entity;
 import ru.bibarsov.jdbcstdops.entity.EntityWithDeferredId;
 import ru.bibarsov.jdbcstdops.helper.DatabaseManager;
@@ -21,6 +22,9 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import ru.bibarsov.jdbcstdops.value.DeferredId;
+import ru.bibarsov.jdbcstdops.value.EntType1;
+import ru.bibarsov.jdbcstdops.value.EntType2;
+import ru.bibarsov.jdbcstdops.value.EntType3;
 
 @ParametersAreNonnullByDefault
 public class StandardOperationsTest {
@@ -53,7 +57,15 @@ public class StandardOperationsTest {
   public void testFindOne() {
     //simple entity
     var entityStdOps = new StandardOperations<>(Entity.class, jdbcTemplate);
-    var entity = new Entity(1L, "example-1");
+    var entity = new Entity(
+        1L,
+        "example-1",
+        null,
+        EntType1.A,
+        EntType2.E,
+        EntType3.G,
+        Instant.EPOCH
+    );
     entityStdOps.create(entity);
     Assert.assertEquals(entity, entityStdOps.findOne(1L));
 
@@ -68,9 +80,9 @@ public class StandardOperationsTest {
   public void testGetAll() {
     var entityStdOps = new StandardOperations<>(Entity.class, jdbcTemplate);
     List<Entity> entities = List.of(
-        new Entity(1L, "example-1"),
-        new Entity(2L, "example-2"),
-        new Entity(3L, "example-3")
+        new Entity(1L, "example-1", null, EntType1.A, EntType2.D, EntType3.G, Instant.EPOCH),
+        new Entity(2L, "example-2", "notnull", EntType1.B, EntType2.E, EntType3.H, Instant.EPOCH),
+        new Entity(3L, "example-3", null, EntType1.C, EntType2.F, EntType3.I, Instant.EPOCH)
     );
     for (Entity entity : entities) {
       entityStdOps.create(entity);
@@ -101,7 +113,7 @@ public class StandardOperationsTest {
   @Test
   public void testCreate() {
     var entityStdOps = new StandardOperations<>(Entity.class, jdbcTemplate);
-    var entity = new Entity(1L, "simple");
+    var entity = new Entity(1L, "simple", null, EntType1.A, EntType2.F, EntType3.G, Instant.EPOCH);
     entityStdOps.create(entity);
     Assert.assertEquals(entity, entityStdOps.findOne(1L));
   }
@@ -133,9 +145,12 @@ public class StandardOperationsTest {
   public void testDelete() {
     var entityDefStdOps = new StandardOperations<>(EntityWithDeferredId.class, jdbcTemplate);
     var entity = new EntityWithDeferredId(DeferredId.ofImmediateId(1L), "new");
+    var entity2 = new EntityWithDeferredId(DeferredId.ofImmediateId(2L), "new2");
     entityDefStdOps.create(entity);
+    entityDefStdOps.create(entity2);
     entityDefStdOps.deleteOne(checkNotNull(entity.id.value));
     Assert.assertNull(entityDefStdOps.findOne(checkNotNull(entity.id.value)));
+    Assert.assertEquals(entity2, entityDefStdOps.findOne(2L));
     entityDefStdOps.deleteOne(checkNotNull(entity.id.value));
   }
 }

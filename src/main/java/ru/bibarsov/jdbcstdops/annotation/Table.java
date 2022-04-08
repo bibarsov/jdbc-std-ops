@@ -13,5 +13,5 @@ public @interface Table {
   /**
    * The name of the table.
    */
-  String name() default "";
+  String name();
 }

@@ -13,8 +13,12 @@ public class Preconditions {
   }
 
   public static <T> T checkNotNull(@Nullable T reference) {
+    return checkNotNull(reference, null);
+  }
+
+  public static <T> T checkNotNull(@Nullable T reference, @Nullable String errorDescription) {
     if (reference == null) {
-      throw new NullPointerException();
+      throw new NullPointerException(errorDescription);
     }
     return reference;
   }

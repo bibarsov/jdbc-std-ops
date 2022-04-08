@@ -21,4 +21,13 @@ public class Query {
     this.parameterSource = parameterSource;
     this.hasReturningStatement = hasReturningStatement;
   }
+
+  @Override
+  public String toString() {
+    return "Query{" +
+        "sqlQuery='" + sqlQuery + '\'' +
+        ", parameterSource=" + parameterSource +
+        ", hasReturningStatement=" + hasReturningStatement +
+        '}';
+  }
 }
