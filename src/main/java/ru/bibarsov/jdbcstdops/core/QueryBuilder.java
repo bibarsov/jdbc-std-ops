@@ -12,13 +12,9 @@ import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import ru.bibarsov.jdbcstdops.util.Pair;
-import ru.bibarsov.jdbcstdops.value.DeferredId;
 import ru.bibarsov.jdbcstdops.value.QueryType;
 
-//TODO Use own ColumnDef type instead of
-// ColumnDefinition (valueClass, javaReflectionField, nullable aren't needed)
 @ParametersAreNonnullByDefault
 public class QueryBuilder {
 
@@ -29,11 +25,11 @@ public class QueryBuilder {
 
   private boolean built = false;
   //Map<ColumnName, Pair<ColumnDefinition, JavaReflectionFieldValue>>
-  private Map<String, Pair<ColumnDefinition, Object>> conditions;
+  private Map<String, Pair<QueryColDef, Object>> conditions;
   private List<String> columnsToSelect;
   //Map<ColumnName, Pair<ColumnDefinition, JavaReflectionFieldValue>>
-  private Map<String, Pair<ColumnDefinition, Object>> columnsToInsert;
-  private ColumnDefinition idColumn;
+  private Map<String, Pair<QueryColDef, Object>> columnsToInsert;
+  private QueryColDef idColumn;
   private boolean generateAndReturnId = false; //false by default
 
   public QueryBuilder(ColumnValueConverter columnValueConverter) {
@@ -50,7 +46,8 @@ public class QueryBuilder {
     return this;
   }
 
-  public QueryBuilder setIdColumn(ColumnDefinition idColumn) {
+  public QueryBuilder setIdColumn(QueryColDef idColumn) {
+    checkNotNull(idColumn.idMetadata);
     this.idColumn = idColumn;
     return this;
   }
@@ -63,7 +60,7 @@ public class QueryBuilder {
 
   //todo generalize
   public QueryBuilder setColumnsToInsert(
-      LinkedHashMap<String, Pair<ColumnDefinition, Object>> columnsToInsert
+      LinkedHashMap<String, Pair<QueryColDef, Object>> columnsToInsert
   ) {
     checkState(!columnsToInsert.isEmpty());
     this.columnsToInsert = Collections.unmodifiableMap(columnsToInsert);
@@ -75,7 +72,7 @@ public class QueryBuilder {
     return this;
   }
 
-  public QueryBuilder setCondition(ColumnDefinition column, @Nullable Object value) {
+  public QueryBuilder setCondition(QueryColDef column, @Nullable Object value) {
     if (conditions == null) {
       this.conditions = new HashMap<>();
     }
@@ -252,12 +249,12 @@ public class QueryBuilder {
   private void addValue(
       MapSqlParameterSource mapSqlParameterSource,
       String paramName,
-      ColumnDefinition columnDefinition,
+      QueryColDef queryColDef,
       @Nullable Object value
   ) {
     @Nullable Object dbTypeValue = columnValueConverter.toDbTypeValue(
         value,
-        columnDefinition.enumMetadata
+        queryColDef.enumMetadata
     );
     mapSqlParameterSource.addValue(paramName, dbTypeValue);
   }

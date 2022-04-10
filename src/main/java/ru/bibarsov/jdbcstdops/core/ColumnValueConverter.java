@@ -1,6 +1,5 @@
 package ru.bibarsov.jdbcstdops.core;
 
-import static ru.bibarsov.jdbcstdops.core.ColumnDefinition.EnumMetadata;
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkNotNull;
 
 import java.lang.reflect.InvocationTargetException;
