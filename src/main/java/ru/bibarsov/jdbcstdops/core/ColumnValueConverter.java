@@ -21,20 +21,20 @@ public class ColumnValueConverter {
   @Nullable
   public Object toDbTypeValue(
       @Nullable Object javaValue,
-      @Nullable EnumMetadata enumMetadata
+      QueryColDef queryColDef
   ) {
     if (javaValue == null) {
       return null;
     }
     if (javaValue instanceof Enum) {
       checkNotNull(
-          enumMetadata,
+          queryColDef.enumMetadata,
           "No enumMetadata is provided for class " + javaValue.getClass()
       );
-      if (enumMetadata.accessorField != null) {
-        return toRawValueViaField((Enum<?>) javaValue, enumMetadata.accessorField);
-      } else if (enumMetadata.accessorMethod != null) {
-        return toRawValueViaMethod((Enum<?>) javaValue, enumMetadata.accessorMethod);
+      if (queryColDef.enumMetadata.accessorField != null) {
+        return toRawValueViaField((Enum<?>) javaValue, queryColDef.enumMetadata.accessorField);
+      } else if (queryColDef.enumMetadata.accessorMethod != null) {
+        return toRawValueViaMethod((Enum<?>) javaValue, queryColDef.enumMetadata.accessorMethod);
       } else {
         return ((Enum<?>) javaValue).name();
       }

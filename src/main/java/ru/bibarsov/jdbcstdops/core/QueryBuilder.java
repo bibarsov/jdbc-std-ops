@@ -3,15 +3,24 @@ package ru.bibarsov.jdbcstdops.core;
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkNotNull;
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkState;
 
+import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.util.StringUtils;
+import ru.bibarsov.jdbcstdops.annotation.Column;
 import ru.bibarsov.jdbcstdops.util.Pair;
 import ru.bibarsov.jdbcstdops.value.QueryType;
 
@@ -105,10 +114,11 @@ public class QueryBuilder {
         "Columns to insert must be provided"
     );
     StringBuilder queryString = new StringBuilder();
+    List<String> compositeKeys = new ArrayList<>();
     queryString.append(String.format(
         "INSERT INTO %s (%s) VALUES (%s)",
         tableName,
-        String.join(",", columnsToInsert.keySet()),
+        String.join(",", generateColumnsNames(columnsToInsert, ()->compositeKeys)),
         columnsToInsert.keySet().stream()
             .map(c -> {
               if (generateAndReturnId && c.equals(idColumn.columnName)) {
@@ -116,6 +126,8 @@ public class QueryBuilder {
                     "nextval('%s')", //db dialect dependant!
                     checkNotNull(idColumn.idMetadata).sequenceName
                 );
+              }else if(c == null && idColumn.idMetadata != null && idColumn.idMetadata.isCompositeKey) {
+                return String.join(",", compositeKeys.stream().map(k->":"+k).toList());
               }
               return ":" + c;
             })
@@ -135,6 +147,29 @@ public class QueryBuilder {
       );
     }
     return new Query(query, parameterSource, generateAndReturnId);
+  }
+
+  private Set<String> generateColumnsNames(
+      Map<String, Pair<QueryColDef, Object>> strings,
+      Supplier<List<String>> supplier
+  ) {
+    if (strings.keySet().stream().anyMatch(Objects::isNull)) {
+      Set<String> result = new LinkedHashSet<>();
+      for (Entry<String, Pair<QueryColDef, Object>> entry : strings.entrySet()) {
+        if (entry.getKey()!=null) {
+          result.add(entry.getKey());
+        }else {
+          Object objValue = entry.getValue().right;
+          for (Field declaredField : objValue.getClass().getDeclaredFields()) {
+            Column annotation = declaredField.getAnnotation(Column.class);
+            supplier.get().add(annotation.name());
+            result.add(annotation.name());
+          }
+        }
+      }
+      return result;
+    }
+    return strings.keySet();
   }
 
   private Query buildUpsertQuery() {
@@ -254,8 +289,32 @@ public class QueryBuilder {
   ) {
     @Nullable Object dbTypeValue = columnValueConverter.toDbTypeValue(
         value,
-        queryColDef.enumMetadata
+        queryColDef
     );
-    mapSqlParameterSource.addValue(paramName, dbTypeValue);
+    if (queryColDef.idMetadata != null && queryColDef.idMetadata.isCompositeKey) {
+      Map<String, Object> paramNameToValue = resolveCompositeKey(dbTypeValue);
+      mapSqlParameterSource.addValues(paramNameToValue);
+      //todo
+    } else {
+      mapSqlParameterSource.addValue(paramName, dbTypeValue);
+    }
+  }
+
+  private Map<String, Object> resolveCompositeKey(Object dbTypeValue) {
+    Map<String, Object> paramNameToValue = new LinkedHashMap<>();
+    for (Field declaredField : dbTypeValue.getClass().getDeclaredFields()) {
+      Column column = declaredField.getAnnotation(Column.class);
+      if (column !=null) {
+        String name = column.name();
+        Object fieldValue;
+        try {
+          fieldValue = declaredField.get(dbTypeValue);
+        } catch (IllegalAccessException e) {
+          throw new RuntimeException(e);
+        }
+        paramNameToValue.put(name, fieldValue);
+      }
+    }
+    return paramNameToValue;
   }
 }

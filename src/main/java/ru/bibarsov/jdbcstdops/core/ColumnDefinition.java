@@ -10,6 +10,7 @@ import javax.annotation.ParametersAreNonnullByDefault;
 public class ColumnDefinition {
 
   public final Field javaReflectionField;
+  @Nullable
   public final String columnName;
   public final Class<?> valueClass;
   @Nullable
@@ -20,7 +21,7 @@ public class ColumnDefinition {
 
   public ColumnDefinition(
       Field javaReflectionField,
-      String columnName,
+      @Nullable String columnName,
       Class<?> valueClass,
       @Nullable IdMetadata idMetadata,
       @Nullable EnumMetadata enumMetadata,

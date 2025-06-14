@@ -5,6 +5,8 @@ import static ru.bibarsov.jdbcstdops.util.Preconditions.checkNotNull;
 
 import java.time.Instant;
 import ru.bibarsov.jdbcstdops.entity.Entity;
+import ru.bibarsov.jdbcstdops.entity.EntityWithCompositeId;
+import ru.bibarsov.jdbcstdops.entity.EntityWithCompositeId.EntityId;
 import ru.bibarsov.jdbcstdops.entity.EntityWithDeferredId;
 import ru.bibarsov.jdbcstdops.helper.DatabaseManager;
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
@@ -74,6 +76,13 @@ public class StandardOperationsTest {
     var defEx = new EntityWithDeferredId(DeferredId.create(), "example-2");
     entityDefStdOps.create(defEx);
     Assert.assertEquals(defEx, entityDefStdOps.findOne(1L));
+
+
+    //entity with composite id
+    var entityCompositeStdOps = new StandardOperations<>(EntityWithCompositeId.class, jdbcTemplate);
+    var entComp = new EntityWithCompositeId(new EntityId(1,2), "example-1");
+    entityCompositeStdOps.create(entComp);
+//    Assert.assertEquals(entComp, entityCompositeStdOps.findOne(new EntityId(1,2)));
   }
 
   @Test

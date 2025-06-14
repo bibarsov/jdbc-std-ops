@@ -25,6 +25,13 @@ public class DatabaseManager {
             + "              id   bigint            NOT NULL PRIMARY KEY,"
             + "              name character varying NOT NULL"
             + "          );"
+        + "      CREATE TABLE IF NOT EXISTS public.entity_composite"
+        + "          ("
+        + "              first_part   bigint            NOT NULL,"
+        + "              second_part   bigint            NOT NULL,"
+        + "              name character varying NOT NULL,"
+        + "              CONSTRAINT entity_composite_pkey PRIMARY KEY (first_part, second_part)"
+        + "          );"
             + ""
             + "      CREATE SEQUENCE IF NOT EXISTS public.entity_deferred_id_seq;"
     );
@@ -35,6 +42,7 @@ public class DatabaseManager {
         ""
             + "      DROP TABLE IF EXISTS public.entity;"
             + "      DROP TABLE IF EXISTS public.entity_deferred;"
+            + "      DROP TABLE IF EXISTS public.entity_composite;"
             + "      DROP SEQUENCE IF EXISTS public.entity_deferred_id_seq;"
     );
   }

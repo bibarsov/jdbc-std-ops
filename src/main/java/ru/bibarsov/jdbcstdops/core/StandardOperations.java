@@ -115,7 +115,7 @@ public class StandardOperations<E, ID> {
     );
   }
 
-  public Collection<E> getAll() {
+  public List<E> getAll() {
     QueryFunction queryFunction = queriesLambdas.get(OperationType.GET_ALL);
     //noinspection unchecked
     return (List<E>) queryFunction.query(jdbcTemplate, (ignored -> {
@@ -363,8 +363,9 @@ public class StandardOperations<E, ID> {
     List<ColumnDefinition> result = new ArrayList<>(entityFields.length);
     for (Field entityField : entityFields) {
       checkState(
-          entityField.isAnnotationPresent(Column.class),
-          "Field " + entityField.getName() + " should be annotated with @Column"
+          entityField.isAnnotationPresent(Column.class) || checkIsCompositeKey(entityField),
+          "Field " + entityField.getName() + " should be annotated with @Column "
+          + "or with @Id and compositeKey=true"
       );
       Column columnAnnotation = entityField.getAnnotation(Column.class);
       boolean hasIdAnnotation = entityField.isAnnotationPresent(Id.class);
@@ -374,12 +375,19 @@ public class StandardOperations<E, ID> {
       EnumMetadata enumMetadata = null;
       DbSideId dbSideId = null;
       if (hasIdAnnotation) {
+        Id idAnnotation = entityField.getAnnotation(Id.class);
         hasIdField = true;
         if (entityField.isAnnotationPresent(DbSideId.class)) {
+          if (idAnnotation.compositeKey()) {
+            throw new IllegalStateException(
+                "Entity field " + entityField.getName() +
+                " can't be composite and db-side generated key at the same time");
+          }
           dbSideId = entityField.getAnnotation(DbSideId.class);
         }
         idMetadata = new IdMetadata(
             dbSideId != null, //isDbSideGenerated
+            idAnnotation.compositeKey(), //isCompositeKey
             dbSideId != null ? dbSideId.sequenceName() : null //sequenceName
         );
       }
@@ -393,11 +401,11 @@ public class StandardOperations<E, ID> {
       }
       result.add(new ColumnDefinition(
           entityField,
-          columnAnnotation.name(), //columnName
+          columnAnnotation!=null?columnAnnotation.name():null, //columnName
           entityField.getType(),
           idMetadata,
           enumMetadata,
-          columnAnnotation.nullable() //nullable
+          columnAnnotation==null ||columnAnnotation.nullable() //nullable
       ));
     }
     if (!hasIdField) {
@@ -405,6 +413,15 @@ public class StandardOperations<E, ID> {
     }
     return Collections.unmodifiableList(result);
   }
+
+  private static boolean checkIsCompositeKey(Field entityField) {
+    Id annotation = entityField.getAnnotation(Id.class);
+    if (annotation!=null) {
+      return annotation.compositeKey();
+    }
+    return false;
+  }
+
   private static QueryColDef toQueryColDef(ColumnDefinition columnDefinition){
     return new QueryColDef(
         columnDefinition.columnName,

@@ -60,7 +60,7 @@ public class QueryBuilderTest {
     queryBuilder.setTableName("foobar");
     QueryColDef col1 = new QueryColDef(
         "col1", //columnName
-        new IdMetadata(false, null),
+        new IdMetadata(false, false, null),
         null //enumMetadata
     );
     QueryColDef col2 = new QueryColDef(
