@@ -2,7 +2,6 @@ package ru.bibarsov.jdbcstdops.core;
 
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkNotNull;
 
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -27,14 +26,14 @@ public class ColumnValueConverter {
       return null;
     }
     if (javaValue instanceof Enum) {
-      checkNotNull(
+      EnumMetadata metadata = checkNotNull(
           queryColDef.enumMetadata,
           "No enumMetadata is provided for class " + javaValue.getClass()
       );
-      if (queryColDef.enumMetadata.accessorField != null) {
-        return toRawValueViaField((Enum<?>) javaValue, queryColDef.enumMetadata.accessorField);
-      } else if (queryColDef.enumMetadata.accessorMethod != null) {
-        return toRawValueViaMethod((Enum<?>) javaValue, queryColDef.enumMetadata.accessorMethod);
+      if (metadata.accessorField != null) {
+        return toRawValueViaField((Enum<?>) javaValue, metadata.accessorField);
+      } else if (metadata.accessorMethod != null) {
+        return toRawValueViaMethod((Enum<?>) javaValue, metadata.accessorMethod);
       } else {
         return ((Enum<?>) javaValue).name();
       }
@@ -67,8 +66,32 @@ public class ColumnValueConverter {
       deferredId.value = rs.getObject(columnName);
       return deferredId;
     }
+    if (clazz.equals(Integer.class)) {
+      int value = rs.getInt(columnName);
+      return rs.wasNull() ? null : value;
+    }
+    if (clazz.equals(Long.class)) {
+      long value = rs.getLong(columnName);
+      return rs.wasNull() ? null : value;
+    }
+    if (clazz.equals(Short.class)) {
+      short value = rs.getShort(columnName);
+      return rs.wasNull() ? null : value;
+    }
+    if (clazz.equals(Byte.class)) {
+      byte value = rs.getByte(columnName);
+      return rs.wasNull() ? null : value;
+    }
+    if (clazz.equals(Double.class)) {
+      double value = rs.getDouble(columnName);
+      return rs.wasNull() ? null : value;
+    }
+    if (clazz.equals(Float.class)) {
+      float value = rs.getFloat(columnName);
+      return rs.wasNull() ? null : value;
+    }
     if (clazz.isEnum()) {
-      checkNotNull(
+      EnumMetadata safeEnumMetadata = checkNotNull(
           enumMetadata,
           "No enumMetadata is provided for class " + clazz
       );
@@ -76,11 +99,12 @@ public class ColumnValueConverter {
       if (object == null) {
         return null;
       }
-      if (enumMetadata.builderMethod != null) {
-        return createInstanceViaBuilder(clazz, enumMetadata.builderMethod, object);
+      if (safeEnumMetadata.builderMethod != null) {
+        return createInstanceViaBuilder(clazz, safeEnumMetadata.builderMethod, object);
       }
-      //noinspection unchecked,rawtypes
-      return Enum.valueOf((Class) clazz, (String) object);
+      @SuppressWarnings({"unchecked", "rawtypes"})
+      Enum enumValue = Enum.valueOf((Class) clazz, (String) object);
+      return enumValue;
     }
 
     return rs.getObject(
@@ -112,8 +136,8 @@ public class ColumnValueConverter {
     );
   }
 
+  @SuppressWarnings("rawtypes")
   private static Object toRawValueViaMethod(Enum<?> javaValue, String methodName) {
-    //noinspection rawtypes
     Class<? extends Enum> aClass = javaValue.getClass();
     Object result = null;
     try {
@@ -127,8 +151,8 @@ public class ColumnValueConverter {
     );
   }
 
+  @SuppressWarnings("rawtypes")
   private static Object toRawValueViaField(Enum<?> javaValue, String fieldName) {
-    //noinspection rawtypes
     Class<? extends Enum> aClass = javaValue.getClass();
     Object result = null;
     try {

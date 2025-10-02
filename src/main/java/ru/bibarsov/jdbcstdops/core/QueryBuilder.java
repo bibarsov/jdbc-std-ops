@@ -3,24 +3,15 @@ package ru.bibarsov.jdbcstdops.core;
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkNotNull;
 import static ru.bibarsov.jdbcstdops.util.Preconditions.checkState;
 
-import java.lang.reflect.Field;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Objects;
-import java.util.Set;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.util.StringUtils;
-import ru.bibarsov.jdbcstdops.annotation.Column;
 import ru.bibarsov.jdbcstdops.util.Pair;
 import ru.bibarsov.jdbcstdops.value.QueryType;
 
@@ -38,7 +29,7 @@ public class QueryBuilder {
   private List<String> columnsToSelect;
   //Map<ColumnName, Pair<ColumnDefinition, JavaReflectionFieldValue>>
   private Map<String, Pair<QueryColDef, Object>> columnsToInsert;
-  private QueryColDef idColumn;
+  private List<QueryColDef> idColumns = Collections.emptyList();
   private boolean generateAndReturnId = false; //false by default
 
   public QueryBuilder(ColumnValueConverter columnValueConverter) {
@@ -55,10 +46,14 @@ public class QueryBuilder {
     return this;
   }
 
-  public QueryBuilder setIdColumn(QueryColDef idColumn) {
-    checkNotNull(idColumn.idMetadata);
-    this.idColumn = idColumn;
+  public QueryBuilder setIdColumns(List<QueryColDef> idColumns) {
+    checkState(!idColumns.isEmpty(), "Id columns must not be empty");
+    this.idColumns = Collections.unmodifiableList(idColumns);
     return this;
+  }
+
+  public QueryBuilder setIdColumn(QueryColDef idColumn) {
+    return setIdColumns(List.of(idColumn));
   }
 
   public QueryBuilder setColumnsToSelect(List<String> columnNames) {
@@ -82,6 +77,7 @@ public class QueryBuilder {
   }
 
   public QueryBuilder setCondition(QueryColDef column, @Nullable Object value) {
+    checkNotNull(column.columnName, "Column name must not be null");
     if (conditions == null) {
       this.conditions = new HashMap<>();
     }
@@ -114,27 +110,32 @@ public class QueryBuilder {
         "Columns to insert must be provided"
     );
     StringBuilder queryString = new StringBuilder();
-    List<String> compositeKeys = new ArrayList<>();
+    QueryColDef generatedIdColumn = findGeneratedIdColumn();
+    if (generateAndReturnId) {
+      checkState(
+          generatedIdColumn != null,
+          "generateAndReturnId requires a generated id column"
+      );
+    }
     queryString.append(String.format(
         "INSERT INTO %s (%s) VALUES (%s)",
         tableName,
-        String.join(",", generateColumnsNames(columnsToInsert, ()->compositeKeys)),
+        String.join(",", columnsToInsert.keySet()),
         columnsToInsert.keySet().stream()
             .map(c -> {
-              if (generateAndReturnId && c.equals(idColumn.columnName)) {
+              if (generateAndReturnId && generatedIdColumn != null
+                  && c.equals(generatedIdColumn.columnName)) {
                 return String.format(
                     "nextval('%s')", //db dialect dependant!
-                    checkNotNull(idColumn.idMetadata).sequenceName
+                    checkNotNull(checkNotNull(generatedIdColumn.idMetadata).sequenceName)
                 );
-              }else if(c == null && idColumn.idMetadata != null && idColumn.idMetadata.isCompositeKey) {
-                return String.join(",", compositeKeys.stream().map(k->":"+k).toList());
               }
               return ":" + c;
             })
             .collect(Collectors.joining(","))
     ));
-    if (generateAndReturnId) {
-      queryString.append(" RETURNING ").append(idColumn.columnName);
+    if (generateAndReturnId && generatedIdColumn != null) {
+      queryString.append(" RETURNING ").append(generatedIdColumn.columnName);
     }
     String query = queryString.toString();
     MapSqlParameterSource parameterSource = new MapSqlParameterSource();
@@ -149,31 +150,19 @@ public class QueryBuilder {
     return new Query(query, parameterSource, generateAndReturnId);
   }
 
-  private Set<String> generateColumnsNames(
-      Map<String, Pair<QueryColDef, Object>> strings,
-      Supplier<List<String>> supplier
-  ) {
-    if (strings.keySet().stream().anyMatch(Objects::isNull)) {
-      Set<String> result = new LinkedHashSet<>();
-      for (Entry<String, Pair<QueryColDef, Object>> entry : strings.entrySet()) {
-        if (entry.getKey()!=null) {
-          result.add(entry.getKey());
-        }else {
-          Object objValue = entry.getValue().right;
-          for (Field declaredField : objValue.getClass().getDeclaredFields()) {
-            Column annotation = declaredField.getAnnotation(Column.class);
-            supplier.get().add(annotation.name());
-            result.add(annotation.name());
-          }
-        }
-      }
-      return result;
-    }
-    return strings.keySet();
-  }
-
   private Query buildUpsertQuery() {
     checkState(columnsToInsert != null && !columnsToInsert.isEmpty());
+    checkState(!idColumns.isEmpty(), "UPSERT requires id columns");
+    QueryColDef generatedIdColumn = findGeneratedIdColumn();
+    if (generateAndReturnId) {
+      checkState(
+          generatedIdColumn != null,
+          "generateAndReturnId requires a generated id column"
+      );
+    }
+    List<String> idColumnNames = idColumns.stream()
+        .map(c -> checkNotNull(c.columnName))
+        .collect(Collectors.toList());
     StringBuilder queryString = new StringBuilder();
     queryString.append(String.format(
         "INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO UPDATE SET %s",
@@ -181,24 +170,25 @@ public class QueryBuilder {
         String.join(",", columnsToInsert.keySet()),
         columnsToInsert.keySet().stream()
             .map(c -> {
-              if (generateAndReturnId && c.equals(idColumn.columnName)) {
+              if (generateAndReturnId && generatedIdColumn != null
+                  && c.equals(generatedIdColumn.columnName)) {
                 return String.format(
                     "nextval('%s')", //db dialect dependant!
-                    checkNotNull(idColumn.idMetadata).sequenceName
+                    checkNotNull(checkNotNull(generatedIdColumn.idMetadata).sequenceName)
                 );
               }
               return ":" + c;
             })
             .collect(Collectors.joining(","))
         ,
-        idColumn.columnName, //todo support composite pk
+        String.join(",", idColumnNames),
         columnsToInsert.keySet().stream()
-            .filter(c -> !(generateAndReturnId && c.equals(idColumn.columnName)))
+            .filter(c -> !idColumnNames.contains(c))
             .map(c -> c + " = " + ":" + c)
             .collect(Collectors.joining(","))
     ));
-    if (generateAndReturnId) {
-      queryString.append(" RETURNING ").append(idColumn.columnName);
+    if (generateAndReturnId && generatedIdColumn != null) {
+      queryString.append(" RETURNING ").append(generatedIdColumn.columnName);
     }
     String query = queryString.toString();
     MapSqlParameterSource parameterSource = new MapSqlParameterSource();
@@ -253,7 +243,7 @@ public class QueryBuilder {
   private Query buildDeleteQuery() {
     StringBuilder queryBuilder = new StringBuilder();
     queryBuilder.append(String.format(
-        "DELETE FROM %s", //todo support composite id
+        "DELETE FROM %s",
         tableName
     ));
     MapSqlParameterSource parameterSource = new MapSqlParameterSource();
@@ -291,30 +281,20 @@ public class QueryBuilder {
         value,
         queryColDef
     );
-    if (queryColDef.idMetadata != null && queryColDef.idMetadata.isCompositeKey) {
-      Map<String, Object> paramNameToValue = resolveCompositeKey(dbTypeValue);
-      mapSqlParameterSource.addValues(paramNameToValue);
-      //todo
-    } else {
-      mapSqlParameterSource.addValue(paramName, dbTypeValue);
-    }
+    mapSqlParameterSource.addValue(paramName, dbTypeValue);
   }
 
-  private Map<String, Object> resolveCompositeKey(Object dbTypeValue) {
-    Map<String, Object> paramNameToValue = new LinkedHashMap<>();
-    for (Field declaredField : dbTypeValue.getClass().getDeclaredFields()) {
-      Column column = declaredField.getAnnotation(Column.class);
-      if (column !=null) {
-        String name = column.name();
-        Object fieldValue;
-        try {
-          fieldValue = declaredField.get(dbTypeValue);
-        } catch (IllegalAccessException e) {
-          throw new RuntimeException(e);
-        }
-        paramNameToValue.put(name, fieldValue);
-      }
+  @Nullable
+  private QueryColDef findGeneratedIdColumn() {
+    if (idColumns == null) {
+      return null;
     }
-    return paramNameToValue;
+    return idColumns.stream()
+        .filter(col -> {
+          IdMetadata metadata = col.idMetadata;
+          return metadata != null && metadata.isDbSideGenerated;
+        })
+        .findFirst()
+        .orElse(null);
   }
 }

@@ -82,7 +82,7 @@ public class StandardOperationsTest {
     var entityCompositeStdOps = new StandardOperations<>(EntityWithCompositeId.class, jdbcTemplate);
     var entComp = new EntityWithCompositeId(new EntityId(1,2), "example-1");
     entityCompositeStdOps.create(entComp);
-//    Assert.assertEquals(entComp, entityCompositeStdOps.findOne(new EntityId(1,2)));
+    Assert.assertEquals(entComp, entityCompositeStdOps.findOne(new EntityId(1,2)));
   }
 
   @Test
@@ -161,5 +161,21 @@ public class StandardOperationsTest {
     Assert.assertNull(entityDefStdOps.findOne(checkNotNull(entity.id.value)));
     Assert.assertEquals(entity2, entityDefStdOps.findOne(2L));
     entityDefStdOps.deleteOne(checkNotNull(entity.id.value));
+  }
+
+  @Test
+  public void testCompositeCrudOperations() {
+    var entityCompositeStdOps = new StandardOperations<>(EntityWithCompositeId.class, jdbcTemplate);
+    var entityId = new EntityId(10, 20);
+    var entity = new EntityWithCompositeId(entityId, "composite-original");
+    entityCompositeStdOps.create(entity);
+    Assert.assertEquals(entity, entityCompositeStdOps.findOne(entityId));
+
+    var updated = new EntityWithCompositeId(entityId, "composite-updated");
+    entityCompositeStdOps.createOrUpdate(updated);
+    Assert.assertEquals(updated, entityCompositeStdOps.findOne(entityId));
+
+    entityCompositeStdOps.deleteOne(entityId);
+    Assert.assertNull(entityCompositeStdOps.findOne(entityId));
   }
 }

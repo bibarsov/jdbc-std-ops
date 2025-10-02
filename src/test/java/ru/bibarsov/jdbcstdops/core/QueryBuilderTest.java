@@ -78,7 +78,7 @@ public class QueryBuilderTest {
     Query build = queryBuilder.build();
     Assert.assertEquals(
         "INSERT INTO foobar (col1,col2) VALUES (:col1,:col2)"
-            + " ON CONFLICT (col1) DO UPDATE SET col1 = :col1,col2 = :col2",
+      + " ON CONFLICT (col1) DO UPDATE SET col2 = :col2",
         build.sqlQuery
     );
     Assert.assertEquals(
@@ -89,6 +89,32 @@ public class QueryBuilderTest {
         2, //expected
         Objects.requireNonNull(build.parameterSource.getValue("col2"))
     );
+    Assert.assertEquals(Boolean.FALSE, build.hasReturningStatement);
+  }
+
+  @Test
+  public void testCompositeIdUpsertQueryBuild() {
+    QueryBuilder queryBuilder = new QueryBuilder(new ColumnValueConverter());
+    queryBuilder.setType(QueryType.UPSERT);
+    queryBuilder.setTableName("foobar");
+    QueryColDef col1 = new QueryColDef("col1", new IdMetadata(false, true, null), null);
+    QueryColDef col2 = new QueryColDef("col2", new IdMetadata(false, true, null), null);
+    QueryColDef payload = new QueryColDef("payload", null, null);
+    queryBuilder.setIdColumns(List.of(col1, col2));
+    queryBuilder.setColumnsToInsert(new LinkedHashMap<>() {{
+      put("col1", Pair.of(col1, 1));
+      put("col2", Pair.of(col2, 2));
+      put("payload", Pair.of(payload, "value"));
+    }});
+    Query build = queryBuilder.build();
+    Assert.assertEquals(
+        "INSERT INTO foobar (col1,col2,payload) VALUES (:col1,:col2,:payload)"
+            + " ON CONFLICT (col1,col2) DO UPDATE SET payload = :payload",
+        build.sqlQuery
+    );
+    Assert.assertEquals(1, Objects.requireNonNull(build.parameterSource.getValue("col1")));
+    Assert.assertEquals(2, Objects.requireNonNull(build.parameterSource.getValue("col2")));
+    Assert.assertEquals("value", Objects.requireNonNull(build.parameterSource.getValue("payload")));
     Assert.assertEquals(Boolean.FALSE, build.hasReturningStatement);
   }
 

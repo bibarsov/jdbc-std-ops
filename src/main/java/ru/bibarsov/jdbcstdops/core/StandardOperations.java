@@ -10,12 +10,12 @@ import java.lang.reflect.InvocationTargetException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
@@ -41,6 +41,8 @@ public class StandardOperations<E, ID> {
   private final NamedParameterJdbcTemplate jdbcTemplate;
   private final List<ColumnDefinition> columnDefinitions;
   private final ColumnDefinition idColumn;
+  private final List<QueryColDef> idColumns;
+  private final List<String> selectColumns;
 
   private final ColumnValueConverter columnValueConverter = new ColumnValueConverter();
 
@@ -52,6 +54,8 @@ public class StandardOperations<E, ID> {
     this.jdbcTemplate = jdbcTemplate;
     this.columnDefinitions = getColumnsDefinitions(entityClazz);
     this.idColumn = getIdColumnName(columnDefinitions);
+    this.idColumns = Collections.unmodifiableList(buildIdColumns(idColumn));
+    this.selectColumns = Collections.unmodifiableList(flattenColumnNames(columnDefinitions));
     this.queriesLambdas = prepareQueriesLambdas(entityClazz, tableName);
   }
 
@@ -60,8 +64,9 @@ public class StandardOperations<E, ID> {
     LinkedHashMap<String, Pair<QueryColDef, Object>> columnsToInsert
         = generateColumnsToInsert(entity);
 
-    if (idColumn.idMetadata != null
-        && idColumn.idMetadata.isDbSideGenerated
+  IdMetadata idMetadata = idColumn.idMetadata;
+  if (idMetadata != null
+    && idMetadata.isDbSideGenerated
         && hasNoDeferredIdValue(entity)
     ) {
       Object idValue = checkNotNull(queryFunction.query(jdbcTemplate, (queryBuilder -> {
@@ -85,8 +90,9 @@ public class StandardOperations<E, ID> {
     LinkedHashMap<String, Pair<QueryColDef, Object>> columnsToInsert
         = generateColumnsToInsert(entity);
 
-    if (idColumn.idMetadata != null
-        && idColumn.idMetadata.isDbSideGenerated
+  IdMetadata idMetadata = idColumn.idMetadata;
+  if (idMetadata != null
+    && idMetadata.isDbSideGenerated
         && hasNoDeferredIdValue(entity)
     ) {
       Object idValue = checkNotNull(queryFunction.query(jdbcTemplate, (queryBuilder -> {
@@ -108,25 +114,27 @@ public class StandardOperations<E, ID> {
   @Nullable
   public E findOne(ID id) {
     QueryFunction queryFunction = queriesLambdas.get(OperationType.FIND_ONE);
-    //noinspection unchecked
-    return (E) queryFunction.query(
+    @SuppressWarnings("unchecked")
+    E result = (E) queryFunction.query(
         jdbcTemplate,
-        queryBuilder -> queryBuilder.setCondition(toQueryColDef(idColumn), id)
+        queryBuilder -> applyIdConditions(queryBuilder, id)
     );
+    return result;
   }
 
   public List<E> getAll() {
     QueryFunction queryFunction = queriesLambdas.get(OperationType.GET_ALL);
-    //noinspection unchecked
-    return (List<E>) queryFunction.query(jdbcTemplate, (ignored -> {
+    @SuppressWarnings("unchecked")
+    List<E> result = (List<E>) queryFunction.query(jdbcTemplate, (ignored -> {
     }));
+    return result;
   }
 
   public void deleteOne(ID id) {
     QueryFunction queryFunction = queriesLambdas.get(OperationType.DELETE);
     queryFunction.query(
         jdbcTemplate,
-        queryBuilder -> queryBuilder.setCondition(toQueryColDef(idColumn), id)
+        queryBuilder -> applyIdConditions(queryBuilder, id)
     );
   }
 
@@ -149,7 +157,7 @@ public class StandardOperations<E, ID> {
             var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.INSERT)
                 .setTableName(tableName)
-                .setIdColumn(toQueryColDef(idColumn));
+                .setIdColumns(idColumns);
             queryBuilderMutator.accept(queryBuilder);
             Query query = queryBuilder.build();
             LOGGER.info("Running query: {} with params: {}", query.sqlQuery,
@@ -174,7 +182,7 @@ public class StandardOperations<E, ID> {
             var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.UPSERT)
                 .setTableName(tableName)
-                .setIdColumn(toQueryColDef(idColumn));
+                .setIdColumns(idColumns);
             queryBuilderMutator.accept(queryBuilder);
             Query query = queryBuilder.build();
             LOGGER.info("Running query: {} with params: {}", query.sqlQuery, query.parameterSource);
@@ -194,15 +202,12 @@ public class StandardOperations<E, ID> {
           });
           break;
         case FIND_ONE:
-          List<String> columnsToInsert = columnDefinitions.stream()
-              .map(c -> c.columnName)
-              .collect(Collectors.toList());
           result.put(operationType, (jdbcTemplate, queryBuilderMutator) -> {
             var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.SELECT)
                 .setTableName(tableName)
-                .setIdColumn(toQueryColDef(idColumn))
-                .setColumnsToSelect(columnsToInsert);
+        .setIdColumns(idColumns)
+        .setColumnsToSelect(selectColumns);
             queryBuilderMutator.accept(queryBuilder);
             Query query = queryBuilder.build();
             LOGGER.info("Running query: {} with params: {}", query.sqlQuery, query.parameterSource);
@@ -224,14 +229,12 @@ public class StandardOperations<E, ID> {
           });
           break;
         case GET_ALL:
-          List<String> columnsToSelect =
-              columnDefinitions.stream().map(c -> c.columnName).collect(Collectors.toList());
           result.put(operationType, (jdbcTemplate, queryBuilderMutator) -> {
             var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.SELECT)
                 .setTableName(tableName)
-                .setIdColumn(toQueryColDef(idColumn))
-                .setColumnsToSelect(columnsToSelect);
+                .setIdColumns(idColumns)
+                .setColumnsToSelect(selectColumns);
             queryBuilderMutator.accept(queryBuilder);
             Query query = queryBuilder.build();
             LOGGER.info("Running query: {} with params: {}", query.sqlQuery, query.parameterSource);
@@ -253,7 +256,7 @@ public class StandardOperations<E, ID> {
             var queryBuilder = new QueryBuilder(columnValueConverter)
                 .setType(QueryType.DELETE)
                 .setTableName(tableName)
-                .setIdColumn(toQueryColDef(idColumn));
+                .setIdColumns(idColumns);
             queryBuilderMutator.accept(queryBuilder);
             Query query = queryBuilder.build();
             LOGGER.info("Running query: {} with params: {}", query.sqlQuery, query.parameterSource);
@@ -279,28 +282,71 @@ public class StandardOperations<E, ID> {
     Object[] constructorArgs = new Object[columnDefinitions.size()];
     for (int i = 0; i < columnDefinitions.size(); i++) {
       ColumnDefinition columnDefinition = columnDefinitions.get(i);
-      IdMetadata idMetadata = columnDefinition.idMetadata;
-      EnumMetadata enumMetadata = columnDefinition.enumMetadata;
-
-      constructorArgs[i] = columnValueConverter.toJavaTypeValue(
-          rs,
-          columnDefinition.columnName,
-          idMetadata != null && idMetadata.isDbSideGenerated ?
-              DeferredId.class :
-              ReflectionTools.primitiveToWrapper(columnDefinition.valueClass),
-          enumMetadata
-      );
-      if (!columnDefinition.nullable && constructorArgs[i] == null) {
+      Object value = columnDefinition.isComposite()
+          ? mapCompositeValue(columnDefinition, rs)
+          : mapSimpleValue(columnDefinition, rs);
+      if (!columnDefinition.nullable && value == null) {
         throw new IllegalStateException(
             "Query returned null value for non-null column " + columnDefinition.columnName
         );
       }
+      constructorArgs[i] = value;
     }
     try {
       Constructor<?> constructor = typeClass.getConstructors()[0];
       checkState(constructor.getParameterCount() == columnDefinitions.size());
-      //noinspection unchecked
-      return (E) constructor.newInstance(constructorArgs);
+      @SuppressWarnings("unchecked")
+      E instance = (E) constructor.newInstance(constructorArgs);
+      return instance;
+    } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  private Object mapSimpleValue(ColumnDefinition columnDefinition, ResultSet rs)
+      throws SQLException {
+    IdMetadata idMetadata = columnDefinition.idMetadata;
+    EnumMetadata enumMetadata = columnDefinition.enumMetadata;
+    String columnName = checkNotNull(
+        columnDefinition.columnName,
+        "Column name must be set for simple field " + columnDefinition.javaReflectionField.getName()
+    );
+    return columnValueConverter.toJavaTypeValue(
+        rs,
+        columnName,
+        idMetadata != null && idMetadata.isDbSideGenerated
+            ? DeferredId.class
+            : ReflectionTools.primitiveToWrapper(columnDefinition.valueClass),
+        enumMetadata
+    );
+  }
+
+  private Object mapCompositeValue(ColumnDefinition columnDefinition, ResultSet rs)
+      throws SQLException {
+    checkState(columnDefinition.isComposite(), "ColumnDefinition is not composite");
+    Constructor<?> constructor = checkNotNull(
+        columnDefinition.compositeConstructor,
+        "Composite constructor is not defined for field "
+            + columnDefinition.javaReflectionField.getName()
+    );
+    Object[] args = new Object[columnDefinition.compositeComponents.size()];
+    for (int i = 0; i < columnDefinition.compositeComponents.size(); i++) {
+      ColumnComponentDefinition component = columnDefinition.compositeComponents.get(i);
+      Object value = columnValueConverter.toJavaTypeValue(
+          rs,
+          component.columnName,
+          ReflectionTools.primitiveToWrapper(component.valueClass),
+          component.enumMetadata
+      );
+      if (!component.nullable && value == null) {
+        throw new IllegalStateException(
+            "Query returned null value for non-null column " + component.columnName
+        );
+      }
+      args[i] = value;
+    }
+    try {
+      return constructor.newInstance(args);
     } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
       throw new RuntimeException(e);
     }
@@ -311,13 +357,32 @@ public class StandardOperations<E, ID> {
     LinkedHashMap<String, Pair<QueryColDef, Object>> result = new LinkedHashMap<>();
     for (ColumnDefinition columnDefinition : columnDefinitions) {
       try {
-        result.put(
-            columnDefinition.columnName,
-            Pair.of(
-                toQueryColDef(columnDefinition),
-                columnDefinition.javaReflectionField.get(entity)
-            )
-        );
+        if (columnDefinition.isComposite()) {
+          Object compositeValue = columnDefinition.javaReflectionField.get(entity);
+          compositeValue = checkNotNull(
+              compositeValue,
+              "Composite id field " + columnDefinition.javaReflectionField.getName()
+                  + " must not be null"
+          );
+          for (ColumnComponentDefinition component : columnDefinition.compositeComponents) {
+            result.put(
+                component.columnName,
+                Pair.of(
+                    toQueryColDef(component, columnDefinition),
+                    component.readValue(compositeValue)
+                )
+            );
+          }
+        } else {
+          result.put(
+              checkNotNull(columnDefinition.columnName,
+                  "Column name must not be null for non composite field"),
+              Pair.of(
+                  toQueryColDef(columnDefinition),
+                  columnDefinition.javaReflectionField.get(entity)
+              )
+          );
+        }
       } catch (IllegalAccessException e) {
         throw new RuntimeException(e);
       }
@@ -357,11 +422,53 @@ public class StandardOperations<E, ID> {
     throw new RuntimeException("Couldn't find ColumnDefinition for id ");
   }
 
+  private void applyIdConditions(QueryBuilder queryBuilder, Object idValue) {
+    if (idColumn.isComposite()) {
+      Object compositeId = checkNotNull(idValue, "Composite id value must not be null");
+      for (ColumnComponentDefinition component : idColumn.compositeComponents) {
+        queryBuilder.setCondition(
+            toQueryColDef(component, idColumn),
+            component.readValue(compositeId)
+        );
+      }
+    } else {
+      queryBuilder.setCondition(toQueryColDef(idColumn), idValue);
+    }
+  }
+
+  private static List<QueryColDef> buildIdColumns(ColumnDefinition idColumnDefinition) {
+    if (idColumnDefinition.isComposite()) {
+      return idColumnDefinition.compositeComponents.stream()
+          .map(component -> toQueryColDef(component, idColumnDefinition))
+          .collect(Collectors.toList());
+    }
+    return List.of(toQueryColDef(idColumnDefinition));
+  }
+
+  private static List<String> flattenColumnNames(List<ColumnDefinition> definitions) {
+    List<String> columns = new ArrayList<>();
+    for (ColumnDefinition definition : definitions) {
+      if (definition.isComposite()) {
+        for (ColumnComponentDefinition component : definition.compositeComponents) {
+          columns.add(component.columnName);
+        }
+      } else {
+        columns.add(checkNotNull(
+            definition.columnName,
+            "Column name must be provided for field "
+                + definition.javaReflectionField.getName()
+        ));
+      }
+    }
+    return columns;
+  }
+
   private static List<ColumnDefinition> getColumnsDefinitions(Class<?> entityClazz) {
     Field[] entityFields = entityClazz.getDeclaredFields();
     boolean hasIdField = false;
     List<ColumnDefinition> result = new ArrayList<>(entityFields.length);
     for (Field entityField : entityFields) {
+      entityField.setAccessible(true);
       checkState(
           entityField.isAnnotationPresent(Column.class) || checkIsCompositeKey(entityField),
           "Field " + entityField.getName() + " should be annotated with @Column "
@@ -374,6 +481,7 @@ public class StandardOperations<E, ID> {
       IdMetadata idMetadata = null;
       EnumMetadata enumMetadata = null;
       DbSideId dbSideId = null;
+      Pair<Constructor<?>, List<ColumnComponentDefinition>> compositeMetadata = null;
       if (hasIdAnnotation) {
         Id idAnnotation = entityField.getAnnotation(Id.class);
         hasIdField = true;
@@ -386,10 +494,13 @@ public class StandardOperations<E, ID> {
           dbSideId = entityField.getAnnotation(DbSideId.class);
         }
         idMetadata = new IdMetadata(
-            dbSideId != null, //isDbSideGenerated
-            idAnnotation.compositeKey(), //isCompositeKey
-            dbSideId != null ? dbSideId.sequenceName() : null //sequenceName
+            dbSideId != null,
+            idAnnotation.compositeKey(),
+            dbSideId != null ? dbSideId.sequenceName() : null
         );
+        if (idAnnotation.compositeKey()) {
+          compositeMetadata = buildCompositeMetadata(entityField);
+        }
       }
       if (hasEnumAnnotation) {
         Enumerated enumerated = entityField.getAnnotation(Enumerated.class);
@@ -399,19 +510,92 @@ public class StandardOperations<E, ID> {
             enumerated.builderMethod().equals("") ? null : enumerated.builderMethod()
         );
       }
-      result.add(new ColumnDefinition(
-          entityField,
-          columnAnnotation!=null?columnAnnotation.name():null, //columnName
-          entityField.getType(),
-          idMetadata,
-          enumMetadata,
-          columnAnnotation==null ||columnAnnotation.nullable() //nullable
-      ));
+    List<ColumnComponentDefinition> componentDefinitions =
+      compositeMetadata != null
+        ? Objects.requireNonNull(compositeMetadata.right)
+        : Collections.<ColumnComponentDefinition>emptyList();
+    result.add(new ColumnDefinition(
+      entityField,
+      columnAnnotation != null ? columnAnnotation.name() : null,
+      entityField.getType(),
+      idMetadata,
+      enumMetadata,
+      columnAnnotation != null && columnAnnotation.nullable(),
+      componentDefinitions,
+      compositeMetadata != null ? compositeMetadata.left : null
+    ));
     }
     if (!hasIdField) {
       throw new RuntimeException("Entity " + entityClazz.getName() + " should have Id field");
     }
     return Collections.unmodifiableList(result);
+  }
+
+  private static Pair<Constructor<?>, List<ColumnComponentDefinition>> buildCompositeMetadata(
+      Field idField
+  ) {
+    Class<?> compositeClass = idField.getType();
+    Field[] declaredFields = compositeClass.getDeclaredFields();
+    List<ColumnComponentDefinition> components = new ArrayList<>();
+    for (Field declaredField : declaredFields) {
+      declaredField.setAccessible(true);
+      Column column = declaredField.getAnnotation(Column.class);
+      if (column == null) {
+        continue;
+      }
+      EnumMetadata componentEnumMetadata = null;
+      if (declaredField.isAnnotationPresent(Enumerated.class)) {
+        Enumerated enumerated = declaredField.getAnnotation(Enumerated.class);
+        componentEnumMetadata = new EnumMetadata(
+            enumerated.accessorField().equals("") ? null : enumerated.accessorField(),
+            enumerated.accessorMethod().equals("") ? null : enumerated.accessorMethod(),
+            enumerated.builderMethod().equals("") ? null : enumerated.builderMethod()
+        );
+      }
+      components.add(new ColumnComponentDefinition(
+          declaredField,
+          column.name(),
+          declaredField.getType(),
+          componentEnumMetadata,
+          column.nullable()
+      ));
+    }
+    checkState(!components.isEmpty(),
+        "Composite id field " + idField.getName() + " must declare at least one @Column");
+    Constructor<?> constructor = findMatchingConstructor(compositeClass, components);
+    constructor.setAccessible(true);
+    return Pair.of(constructor, Collections.unmodifiableList(components));
+  }
+
+  private static Constructor<?> findMatchingConstructor(
+      Class<?> targetClass,
+      List<ColumnComponentDefinition> components
+  ) {
+    Constructor<?>[] constructors = targetClass.getDeclaredConstructors();
+    Constructor<?> match = null;
+    for (Constructor<?> constructor : constructors) {
+      Class<?>[] parameterTypes = constructor.getParameterTypes();
+      if (parameterTypes.length != components.size()) {
+        continue;
+      }
+      boolean matches = true;
+      for (int i = 0; i < parameterTypes.length; i++) {
+        Class<?> parameterType = ReflectionTools.primitiveToWrapper(parameterTypes[i]);
+        Class<?> componentType = ReflectionTools.primitiveToWrapper(components.get(i).valueClass);
+        if (!parameterType.isAssignableFrom(componentType)) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        checkState(match == null,
+            "Multiple constructors match composite id mapping for " + targetClass.getName());
+        match = constructor;
+      }
+    }
+    checkState(match != null,
+        "Couldn't find constructor matching composite id mapping for " + targetClass.getName());
+    return match;
   }
 
   private static boolean checkIsCompositeKey(Field entityField) {
@@ -423,10 +607,25 @@ public class StandardOperations<E, ID> {
   }
 
   private static QueryColDef toQueryColDef(ColumnDefinition columnDefinition){
-    return new QueryColDef(
-        columnDefinition.columnName,
-        columnDefinition.idMetadata,
-        columnDefinition.enumMetadata
-    );
+  checkState(!columnDefinition.isComposite(),
+    "ColumnDefinition " + columnDefinition.javaReflectionField.getName() + " is composite");
+  return new QueryColDef(
+    checkNotNull(columnDefinition.columnName,
+      "Column name must be provided for field "
+        + columnDefinition.javaReflectionField.getName()),
+    columnDefinition.idMetadata,
+    columnDefinition.enumMetadata
+  );
+  }
+
+  private static QueryColDef toQueryColDef(
+    ColumnComponentDefinition componentDefinition,
+    ColumnDefinition parentDefinition
+  ) {
+  return new QueryColDef(
+    componentDefinition.columnName,
+    parentDefinition.idMetadata,
+    componentDefinition.enumMetadata
+  );
   }
 }
