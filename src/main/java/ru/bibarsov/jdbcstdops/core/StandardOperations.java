@@ -130,6 +130,15 @@ public class StandardOperations<E, ID> {
     return result;
   }
 
+  public List<E> getAll(int offset, int limit) {
+    QueryFunction queryFunction = queriesLambdas.get(OperationType.GET_ALL);
+    @SuppressWarnings("unchecked")
+    List<E> result = (List<E>) queryFunction.query(jdbcTemplate, (queryBuilder -> {
+      queryBuilder.setOffset(offset).setLimit(limit);
+    }));
+    return result;
+  }
+
   public void deleteOne(ID id) {
     QueryFunction queryFunction = queriesLambdas.get(OperationType.DELETE);
     queryFunction.query(

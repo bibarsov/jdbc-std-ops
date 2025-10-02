@@ -1,6 +1,5 @@
 package ru.bibarsov.jdbcstdops.core;
 
-import java.lang.reflect.Field;
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 

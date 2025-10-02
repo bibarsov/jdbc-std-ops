@@ -19,7 +19,7 @@ public class QueryBuilderTest {
     queryBuilder.setTableName("foobar");
     queryBuilder.setColumnsToSelect(List.of("col1", "col2"));
     Query build = queryBuilder.build();
-    Assert.assertEquals("SELECT col1,col2 FROM foobar", build.sqlQuery);
+    Assert.assertEquals("SELECT col1,col2 FROM foobar OFFSET 0 LIMIT 2147483647", build.sqlQuery);
     Assert.assertEquals(
         0, //expected
         Objects.requireNonNull(build.parameterSource.getParameterNames()).length

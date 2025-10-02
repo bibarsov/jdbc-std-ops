@@ -31,6 +31,8 @@ public class QueryBuilder {
   private Map<String, Pair<QueryColDef, Object>> columnsToInsert;
   private List<QueryColDef> idColumns = Collections.emptyList();
   private boolean generateAndReturnId = false; //false by default
+  private int offset = 0;
+  private int limit = Integer.MAX_VALUE;
 
   public QueryBuilder(ColumnValueConverter columnValueConverter) {
     this.columnValueConverter = columnValueConverter;
@@ -84,6 +86,20 @@ public class QueryBuilder {
     this.conditions.put(column.columnName, Pair.of(column, value));
     return this;
   }
+
+
+  public QueryBuilder setOffset(int offset) {
+    this.offset = offset;
+    return this;
+  }
+
+
+
+  public QueryBuilder setLimit(int limit) {
+    this.limit = limit;
+    return this;
+  }
+
 
   public Query build() {
     checkState(!built);
@@ -237,6 +253,7 @@ public class QueryBuilder {
         );
       }
     }
+    queryString.append(" OFFSET " + offset + " LIMIT " + limit);
     return new Query(queryString.toString(), parameterSource, generateAndReturnId);
   }
 
